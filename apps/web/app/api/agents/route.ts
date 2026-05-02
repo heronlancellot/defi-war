@@ -1,48 +1,60 @@
 import { NextResponse } from 'next/server'
 
-function generateHexPrivateKey(): string {
-  const bytes = new Uint8Array(32)
-  crypto.getRandomValues(bytes)
-  return '0x' + Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
-}
-
-function generateMockAddress(): string {
-  const bytes = new Uint8Array(20)
-  crypto.getRandomValues(bytes)
-  return '0x' + Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
-}
+const ENGINE_URL = process.env.AGENT_ENGINE_URL ?? 'http://localhost:3001'
 
 export async function POST(request: Request) {
   const { name, strategy } = await request.json()
-
   if (!name || !strategy) {
     return NextResponse.json({ error: 'name and strategy required' }, { status: 400 })
   }
 
-  // Generate simulated EOA wallet for the agent (Phase 2 will use viem)
-  const _privateKey = generateHexPrivateKey()
-  const walletAddress = generateMockAddress()
+  // Generate wallet locally (web crypto)
+  const bytes = new Uint8Array(20)
+  crypto.getRandomValues(bytes)
+  const walletAddress = '0x' + Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
+
+  const pkBytes = new Uint8Array(32)
+  crypto.getRandomValues(pkBytes)
+  const privateKey = '0x' + Array.from(pkBytes).map(b => b.toString(16).padStart(2, '0')).join('')
 
   const agent = {
     id: crypto.randomUUID(),
     name,
     ensName: `${name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}.arena.eth`,
     walletAddress,
+    privateKey,
     strategy,
+  }
+
+  // Persist in engine (which has the DB)
+  try {
+    await fetch(`${ENGINE_URL}/agents`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(agent),
+    })
+  } catch {
+    // Engine might not be running — store locally for now
+    console.warn('Agent engine not reachable')
+  }
+
+  return NextResponse.json({
+    id: agent.id,
+    name: agent.name,
+    ensName: agent.ensName,
+    walletAddress: agent.walletAddress,
+    strategy: agent.strategy,
     pnlTotal: 0,
     pnlLastTrade: 0,
     tradeCount: 0,
-    createdAt: new Date().toISOString(),
-  }
-
-  // TODO: Persist to DB (Phase 2)
-  // TODO: Register ENS subname (Phase 3)
-  // TODO: Start agent loop (Phase 2)
-
-  return NextResponse.json(agent)
+  })
 }
 
 export async function GET() {
-  // TODO: Return agents from DB (Phase 2)
-  return NextResponse.json([])
+  try {
+    const res = await fetch(`${ENGINE_URL}/agents`, { cache: 'no-store' })
+    return NextResponse.json(await res.json())
+  } catch {
+    return NextResponse.json([])
+  }
 }

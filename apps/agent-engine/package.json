@@ -8,9 +8,13 @@
   },
   "dependencies": {
     "@agent-arena/shared": "workspace:*",
+    "@anthropic-ai/sdk": "^0.39.0",
+    "better-sqlite3": "^12.0.0",
+    "dotenv": "^16.0.0",
     "viem": "^2.0.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^20",
     "tsx": "^4.0.0",
     "typescript": "^5"
