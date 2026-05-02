@@ -1,14 +1,15 @@
 import 'dotenv/config'
 import { createServer } from 'http'
 import { WebSocketServer, WebSocket } from 'ws'
-import { getAllAgents, getDb, createAgent } from './db/schema.js'
-import { startAllAgentLoops, startAgentLoop } from './agent/loop.js'
+import { getAllAgents, getDb, createAgent, seedDemoAgents } from './db/schema.js'
+import { startAllAgentLoops, startAgentLoop, triggerCycleAll } from './agent/loop.js'
 import { registerAgentSubname } from './ens/register.js'
 import { getAgentHistory } from './storage/0g.js'
 import { arenaEvents } from './events.js'
 
-// Initialize DB
+// Initialize DB + seed demo agents if empty
 getDb()
+seedDemoAgents()
 console.log('[AgentArena] DB initialized')
 
 function mapRow(row: any) {
@@ -64,6 +65,13 @@ const server = createServer((req, res) => {
         res.end(JSON.stringify({ error: String(err) }))
       }
     })
+    return
+  }
+
+  // POST /trigger — force one cycle on all agents (for testing)
+  if (req.method === 'POST' && req.url === '/trigger') {
+    triggerCycleAll()
+    res.end(JSON.stringify({ ok: true, message: 'Cycles triggered for all agents' }))
     return
   }
 

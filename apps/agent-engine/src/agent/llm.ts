@@ -67,7 +67,25 @@ Decida sua próxima ação.
 
   const data = await res.json()
   const text: string = data.choices?.[0]?.message?.content ?? ''
-  const match = text.match(/\{[\s\S]*\}/)
-  if (!match) throw new Error(`LLM returned invalid JSON: ${text}`)
-  return JSON.parse(match[0]) as LLMDecision
+  return parseDecision(text)
+}
+
+function parseDecision(text: string): LLMDecision {
+  // Strip markdown code fences (```json ... ``` or ``` ... ```)
+  const stripped = text.replace(/```(?:json)?\s*/gi, '').replace(/```/g, '').trim()
+
+  // Try to extract JSON object
+  const match = stripped.match(/\{[\s\S]*\}/)
+  if (!match) throw new Error(`LLM returned no JSON: ${text.slice(0, 200)}`)
+
+  const parsed = JSON.parse(match[0])
+
+  // Normalize common LLM quirks
+  if (parsed.action) parsed.action = String(parsed.action).toUpperCase().trim()
+  if (parsed.tokenIn) parsed.tokenIn = String(parsed.tokenIn).toUpperCase().replace('WETH', 'ETH').trim()
+  if (parsed.tokenOut) parsed.tokenOut = String(parsed.tokenOut).toUpperCase().replace('WETH', 'ETH').trim()
+  if (typeof parsed.amountPercent === 'string') parsed.amountPercent = parseFloat(parsed.amountPercent)
+  if (!parsed.amountPercent || parsed.amountPercent <= 0) parsed.amountPercent = 25
+
+  return parsed as LLMDecision
 }

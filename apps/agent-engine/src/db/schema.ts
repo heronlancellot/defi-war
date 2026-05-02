@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3'
 import path from 'path'
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 
 const DB_PATH = process.env.DATABASE_URL?.replace('sqlite://', '') ?? path.join(process.cwd(), 'agent_arena.db')
 
@@ -62,6 +63,38 @@ export function createAgent(agent: {
     INSERT INTO agents (id, name, ens_name, wallet_address, private_key, strategy, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run(agent.id, agent.name, agent.ensName, agent.walletAddress, agent.privateKey, agent.strategy, new Date().toISOString())
+}
+
+export function seedDemoAgents() {
+  const db = getDb()
+  const count = (db.prepare('SELECT COUNT(*) as n FROM agents').get() as any).n
+  if (count > 0) return
+
+  const demos = [
+    { name: 'alpha-trader',  strategy: 'Buy ETH when 1h change is negative (dip buy), sell when up 2%+. Aggressive.' },
+    { name: 'beta-bot',      strategy: 'Mean reversion: sell ETH when it rises fast, buy when it drops fast.' },
+    { name: 'gamma-agent',   strategy: 'Momentum trader: follow the trend. Buy when rising, sell when falling.' },
+    { name: 'delta-scalper', strategy: 'Scalp small moves. Always use 20% of portfolio. High frequency.' },
+    { name: 'epsilon-hodl',  strategy: 'Long-term holder. Only buy dips bigger than 3%. Never sell unless up 10%.' },
+  ]
+
+  for (const d of demos) {
+    const privateKey = generatePrivateKey()
+    const account = privateKeyToAccount(privateKey)
+    db.prepare(`
+      INSERT OR IGNORE INTO agents (id, name, ens_name, wallet_address, private_key, strategy, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      crypto.randomUUID(),
+      d.name,
+      `${d.name}.arena.eth`,
+      account.address,
+      privateKey,
+      d.strategy,
+      new Date().toISOString(),
+    )
+  }
+  console.log(`[DB] Seeded ${demos.length} demo agents`)
 }
 
 export function getAllAgents() {

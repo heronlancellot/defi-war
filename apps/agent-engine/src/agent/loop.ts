@@ -5,6 +5,20 @@ import { fetchMarketData } from '../market/prices.js'
 import { getAllAgents, getAgentById, updateAgentPnl, saveTrade } from '../db/schema.js'
 import { appendTradeHistory } from '../storage/0g.js'
 import { arenaEvents } from '../events.js'
+import { getQuote, TOKENS } from '../uniswap/api.js'
+import { executeSwap } from '../uniswap/execute.js'
+import { createPublicClient, http, parseEther, formatEther, formatUnits } from 'viem'
+import { defineChain } from 'viem'
+
+const unichainTestnet = defineChain({
+  id: 1301,
+  name: 'Unichain Testnet',
+  nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+  rpcUrls: { default: { http: [process.env.UNICHAIN_RPC_URL ?? 'https://sepolia.unichain.org'] } },
+  testnet: true,
+})
+
+const publicClient = createPublicClient({ chain: unichainTestnet, transport: http() })
 
 // Active agent loops (agentId → true)
 const runningLoops = new Map<string, boolean>()
@@ -14,6 +28,15 @@ export function startAllAgentLoops() {
   console.log(`[Engine] Starting loops for ${agents.length} agent(s)`)
   for (const agent of agents) {
     startAgentLoop(agent.id)
+  }
+}
+
+// Force one immediate cycle on all agents — useful for testing
+export function triggerCycleAll() {
+  const agents = getAllAgents()
+  console.log(`[Engine] Manual trigger: running ${agents.length} cycle(s) now`)
+  for (const agent of agents) {
+    runOneCycle(agent.id).catch(err => console.error(`[${agent.id}] trigger error:`, err))
   }
 }
 
@@ -34,7 +57,7 @@ async function runLoop(agentId: string) {
   }
 }
 
-async function runOneCycle(agentId: string) {
+export async function runOneCycle(agentId: string) {
   const row = getAgentById(agentId)
   if (!row) return
 
@@ -50,50 +73,69 @@ async function runOneCycle(agentId: string) {
     decision = await getLLMDecision(agent, market)
     if (!validateDecision(decision)) throw new Error('Invalid decision from LLM')
   } catch (err) {
-    console.warn(`[${agent.name}] LLM error, defaulting to HOLD:`, err)
+    console.warn(`[${agent.name}] LLM error, defaulting to HOLD:`, String(err).slice(0, 200))
     decision = { action: 'HOLD', tokenIn: 'ETH', tokenOut: 'USDC', amountPercent: 0, reasoning: 'LLM error' }
   }
 
-  console.log(`[${agent.name}] Decision: ${decision.action} | ${decision.reasoning}`)
+  console.log(`[${agent.name}] → ${decision.action} ${decision.tokenIn ?? ''}→${decision.tokenOut ?? ''} ${decision.amountPercent}% | "${decision.reasoning}"`)
 
-  if (decision.action === 'HOLD') return
+  if (decision.action === 'HOLD') {
+    console.log(`[${agent.name}] HOLD — skipping trade`)
+    return
+  }
 
-  // 3. Simulate trade (Phase 2 — real swap in Phase 3)
-  const pnlChange = simulatePnl(decision, market)
-  const newPnlTotal = agent.pnlTotal + pnlChange
-
+  // 3. Execute trade — real swap if wallet is funded, simulated otherwise
   let newEth = agent.portfolioEth ?? 0.1
   let newUsdc = agent.portfolioUsdc ?? 200
+  let pnlChange = 0
+  let txHash: string | undefined
+
+  const privateKey = row.private_key as string
+  const realSwapEnabled = process.env.REAL_SWAPS === 'true' && privateKey?.startsWith('0x')
+
+  if (realSwapEnabled) {
+    try {
+      pnlChange = await executeRealSwap({
+        agent, decision, market, privateKey,
+        portfolioEth: newEth, portfolioUsdc: newUsdc,
+      })
+      txHash = undefined // executeRealSwap returns pnlChange; txHash logged inside
+    } catch (err) {
+      console.warn(`[${agent.name}] Real swap failed, falling back to simulation:`, String(err).slice(0, 150))
+      pnlChange = simulatePnl(decision, market)
+    }
+  } else {
+    pnlChange = simulatePnl(decision, market)
+  }
+
+  const newPnlTotal = agent.pnlTotal + pnlChange
 
   if (decision.action === 'BUY' && decision.tokenIn === 'USDC') {
     const usdcSpend = newUsdc * (decision.amountPercent / 100)
-    const ethBought = usdcSpend / market.eth
     newUsdc -= usdcSpend
-    newEth += ethBought
+    newEth += usdcSpend / market.eth
   } else if (decision.action === 'SELL' && decision.tokenIn === 'ETH') {
     const ethSell = newEth * (decision.amountPercent / 100)
-    const usdcGained = ethSell * market.eth
     newEth -= ethSell
-    newUsdc += usdcGained
+    newUsdc += ethSell * market.eth
   }
 
   // 4. Persist
-  const tradeId = crypto.randomUUID()
   saveTrade({
-    id: tradeId,
+    id: crypto.randomUUID(),
     agentId,
     action: decision.action,
     tokenIn: decision.tokenIn,
     tokenOut: decision.tokenOut,
     amountIn: decision.amountPercent.toString(),
     amountOut: '0',
+    txHash,
     pnl: pnlChange,
     reasoning: decision.reasoning,
   })
 
   updateAgentPnl(agentId, newPnlTotal, pnlChange, newEth, newUsdc, `${decision.action} ${decision.tokenIn}->${decision.tokenOut}`)
 
-  // Fire-and-forget: persist to 0G Storage (or local fallback)
   appendTradeHistory({
     agentId,
     action: decision.action,
@@ -102,20 +144,66 @@ async function runOneCycle(agentId: string) {
     pnl: pnlChange,
     reasoning: decision.reasoning,
     timestamp: new Date().toISOString(),
-  }).catch(() => {}) // never blocks the loop
+    txHash,
+  }).catch(() => {})
 
-  // Emit event so WebSocket server can broadcast to clients
   arenaEvents.emit('agent:updated', agentId)
 
-  console.log(`[${agent.name}] Trade done | PnL: ${pnlChange.toFixed(2)}% | Total: ${newPnlTotal.toFixed(2)}%`)
+  console.log(`[${agent.name}] ✓ Trade | PnL: ${pnlChange >= 0 ? '+' : ''}${pnlChange.toFixed(3)}% | Total: ${newPnlTotal.toFixed(3)}% | ${realSwapEnabled ? 'REAL' : 'SIM'}`)
 }
 
 function simulatePnl(decision: LLMDecision, market: { ethChange1h: number }): number {
-  // Simulated PnL based on price movement and decision direction
   const priceMove = market.ethChange1h
   const correct = (decision.action === 'BUY' && priceMove > 0) || (decision.action === 'SELL' && priceMove < 0)
   const magnitude = Math.abs(priceMove) * (decision.amountPercent / 100) * 0.3
   return correct ? magnitude : -magnitude
+}
+
+async function executeRealSwap(params: {
+  agent: AgentType & { portfolioEth: number; portfolioUsdc: number }
+  decision: LLMDecision
+  market: { eth: number }
+  privateKey: string
+  portfolioEth: number
+  portfolioUsdc: number
+}): Promise<number> {
+  const { agent, decision, market, privateKey, portfolioEth, portfolioUsdc } = params
+
+  // Determine token addresses and amount
+  const tokenInAddr = decision.tokenIn === 'ETH' ? TOKENS.WETH : TOKENS.USDC
+  const tokenOutAddr = decision.tokenOut === 'ETH' ? TOKENS.WETH : TOKENS.USDC
+
+  let amountIn: bigint
+  if (decision.tokenIn === 'ETH') {
+    const ethAmount = portfolioEth * (decision.amountPercent / 100)
+    if (ethAmount < 0.0001) throw new Error('ETH amount too small')
+    amountIn = parseEther(ethAmount.toFixed(6))
+  } else {
+    const usdcAmount = portfolioUsdc * (decision.amountPercent / 100)
+    if (usdcAmount < 1) throw new Error('USDC amount too small')
+    amountIn = BigInt(Math.floor(usdcAmount * 1e6)) // USDC has 6 decimals
+  }
+
+  console.log(`[${agent.name}] Fetching quote: ${decision.tokenIn}→${decision.tokenOut} amount=${amountIn}`)
+  const quote = await getQuote(tokenInAddr, tokenOutAddr, amountIn.toString(), agent.walletAddress)
+
+  const result = await executeSwap(quote, privateKey)
+  console.log(`[${agent.name}] Swap tx: ${result.txHash}`)
+
+  // Calculate PnL from actual amounts
+  const amountOutNum = decision.tokenOut === 'ETH'
+    ? Number(formatEther(BigInt(result.amountOut)))
+    : Number(formatUnits(BigInt(result.amountOut), 6))
+
+  const valueIn = decision.tokenIn === 'ETH'
+    ? Number(formatEther(amountIn)) * market.eth
+    : Number(amountIn) / 1e6
+
+  const valueOut = decision.tokenOut === 'ETH'
+    ? amountOutNum * market.eth
+    : amountOutNum
+
+  return ((valueOut - valueIn) / valueIn) * 100
 }
 
 function dbRowToAgent(row: any): AgentType & { portfolioEth: number; portfolioUsdc: number; lastTrade: string } {
