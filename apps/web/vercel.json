@@ -1,0 +1,10 @@
+{
+  "buildCommand": "pnpm build",
+  "outputDirectory": ".next",
+  "installCommand": "pnpm install",
+  "framework": "nextjs",
+  "env": {
+    "AGENT_ENGINE_URL": "@agent-engine-url",
+    "NEXT_PUBLIC_WS_URL": "@next-public-ws-url"
+  }
+}

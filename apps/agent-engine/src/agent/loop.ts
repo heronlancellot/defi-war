@@ -3,6 +3,8 @@ import { getLLMDecision } from './llm.js'
 import { validateDecision } from './decision.js'
 import { fetchMarketData } from '../market/prices.js'
 import { getAllAgents, getAgentById, updateAgentPnl, saveTrade } from '../db/schema.js'
+import { appendTradeHistory } from '../storage/0g.js'
+import { arenaEvents } from '../events.js'
 
 // Active agent loops (agentId → true)
 const runningLoops = new Map<string, boolean>()
@@ -90,6 +92,20 @@ async function runOneCycle(agentId: string) {
   })
 
   updateAgentPnl(agentId, newPnlTotal, pnlChange, newEth, newUsdc, `${decision.action} ${decision.tokenIn}->${decision.tokenOut}`)
+
+  // Fire-and-forget: persist to 0G Storage (or local fallback)
+  appendTradeHistory({
+    agentId,
+    action: decision.action,
+    tokenIn: decision.tokenIn,
+    tokenOut: decision.tokenOut,
+    pnl: pnlChange,
+    reasoning: decision.reasoning,
+    timestamp: new Date().toISOString(),
+  }).catch(() => {}) // never blocks the loop
+
+  // Emit event so WebSocket server can broadcast to clients
+  arenaEvents.emit('agent:updated', agentId)
 
   console.log(`[${agent.name}] Trade done | PnL: ${pnlChange.toFixed(2)}% | Total: ${newPnlTotal.toFixed(2)}%`)
 }

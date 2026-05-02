@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useCallback, useState } from 'react'
+import { useAgentStream } from '../hooks/useAgentStream'
 
 const getRadius = (pnl: number) => Math.min(120, Math.max(20, 40 + pnl * 2))
 const truncate = (s: string, n: number) => s.length > n ? s.slice(0, n) + '…' : s
@@ -35,10 +36,17 @@ export default function Arena() {
   const animFrameRef = useRef<number>(0)
   const tooltipRef = useRef<{ agent: BubbleAgent | null; mx: number; my: number }>({ agent: null, mx: 0, my: 0 })
 
+  const { agents: streamAgents } = useAgentStream()
   const [agentData, setAgentData] = useState<any[]>([])
 
-  // Poll API every 10s
+  // Use WebSocket stream when available
   useEffect(() => {
+    if (streamAgents.length > 0) setAgentData(streamAgents)
+  }, [streamAgents])
+
+  // HTTP fallback poll when WS is not connected/empty
+  useEffect(() => {
+    if (streamAgents.length > 0) return // WS active, no need to poll
     const poll = async () => {
       try {
         const res = await fetch('/api/agents', { cache: 'no-store' })
@@ -49,7 +57,7 @@ export default function Arena() {
     poll()
     const id = setInterval(poll, 10_000)
     return () => clearInterval(id)
-  }, [])
+  }, [streamAgents.length])
 
   // Sync agent data into canvas ref — preserve positions/velocities
   useEffect(() => {

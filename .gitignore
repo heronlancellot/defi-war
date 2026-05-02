@@ -43,3 +43,17 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Agent history (0G Storage fallback)
+.agent-history/
+
+# SQLite
+*.db
+*.db-shm
+*.db-wal
+
+# Env
+.env
+.env.local
+apps/web/.env.local
+apps/agent-engine/.env

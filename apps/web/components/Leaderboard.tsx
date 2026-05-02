@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useAgentStream } from '../hooks/useAgentStream'
 
 interface AgentRow {
   id: string
@@ -11,9 +12,19 @@ interface AgentRow {
 }
 
 export default function Leaderboard() {
+  const { agents: streamAgents, connected } = useAgentStream()
   const [agents, setAgents] = useState<AgentRow[]>([])
 
+  // Use WebSocket stream when available
   useEffect(() => {
+    if (streamAgents.length > 0) {
+      setAgents([...streamAgents].sort((a, b) => b.pnlTotal - a.pnlTotal))
+    }
+  }, [streamAgents])
+
+  // HTTP fallback poll when WS is not connected/empty
+  useEffect(() => {
+    if (streamAgents.length > 0) return
     const fetchAgents = async () => {
       try {
         const res = await fetch('/api/agents', { cache: 'no-store' })
@@ -26,7 +37,7 @@ export default function Leaderboard() {
     fetchAgents()
     const id = setInterval(fetchAgents, 10_000)
     return () => clearInterval(id)
-  }, [])
+  }, [streamAgents.length])
 
   const displayAgents = agents.length > 0 ? agents : [
     { id: '1', name: 'alpha-trader', walletAddress: '0x00000a48', pnlTotal: 22.10, tradeCount: 14 },
@@ -36,7 +47,13 @@ export default function Leaderboard() {
 
   return (
     <div className="p-4">
-      <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-widest mb-4">Leaderboard</h2>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-widest">Leaderboard</h2>
+        <div className="flex items-center gap-1.5">
+          <div className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-green-400 animate-pulse' : 'bg-zinc-600'}`} />
+          <span className="text-xs text-zinc-600">{connected ? 'live' : 'polling'}</span>
+        </div>
+      </div>
       <div className="space-y-2">
         {displayAgents.map((agent, i) => {
           const pnl = agent.pnlTotal ?? (agent as any).pnl_total ?? 0

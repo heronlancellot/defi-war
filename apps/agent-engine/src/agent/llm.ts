@@ -1,10 +1,15 @@
-import Anthropic from '@anthropic-ai/sdk'
 import type { Agent, LLMDecision } from '@agent-arena/shared'
 import type { MarketData } from '../market/prices.js'
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+const OPENROUTER_BASE = 'https://openrouter.ai/api/v1'
+// Default model — override via LLM_MODEL env var
+// Good free/cheap options: "google/gemini-flash-1.5", "meta-llama/llama-3.1-8b-instruct:free"
+const DEFAULT_MODEL = 'google/gemini-flash-1.5'
 
-export async function getLLMDecision(agent: Agent & { portfolioEth?: number; portfolioUsdc?: number; lastTrade?: string }, marketData: MarketData): Promise<LLMDecision> {
+export async function getLLMDecision(
+  agent: Agent & { portfolioEth?: number; portfolioUsdc?: number; lastTrade?: string },
+  marketData: MarketData,
+): Promise<LLMDecision> {
   const systemPrompt = `
 Você é um agente de trading autônomo na blockchain Unichain.
 Sua estratégia definida pelo usuário: "${agent.strategy}"
@@ -18,7 +23,7 @@ Responda APENAS com JSON válido no formato:
   "amountPercent": number (0-100),
   "reasoning": "string curta"
 }
-`
+`.trim()
 
   const userPrompt = `
 Dados de mercado atuais:
@@ -35,19 +40,34 @@ Seu portfolio atual:
 - Último trade: ${agent.lastTrade ?? 'nenhum'}
 
 Decida sua próxima ação.
-`
+`.trim()
 
-  // Use claude-haiku-4-5-20251001 for speed and cost in hackathon
-  const message = await client.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 256,
-    messages: [{ role: 'user', content: userPrompt }],
-    system: systemPrompt,
+  const res = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://github.com/heronlancellot/defi-war',
+      'X-Title': 'AgentArena',
+    },
+    body: JSON.stringify({
+      model: process.env.LLM_MODEL ?? DEFAULT_MODEL,
+      max_tokens: 256,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    }),
   })
 
-  const text = message.content[0].type === 'text' ? message.content[0].text : ''
-  // Parse JSON from response
+  if (!res.ok) {
+    const err = await res.text()
+    throw new Error(`OpenRouter error ${res.status}: ${err}`)
+  }
+
+  const data = await res.json()
+  const text: string = data.choices?.[0]?.message?.content ?? ''
   const match = text.match(/\{[\s\S]*\}/)
-  if (!match) throw new Error('LLM returned invalid JSON')
+  if (!match) throw new Error(`LLM returned invalid JSON: ${text}`)
   return JSON.parse(match[0]) as LLMDecision
 }
