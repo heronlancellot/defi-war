@@ -4,7 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js"
+    "build": "tsc --noEmit",
+    "start": "node dist/index.js",
+    "wallets": "tsx scripts/wallets.ts"
   },
   "dependencies": {
     "@agent-arena/shared": "workspace:*",

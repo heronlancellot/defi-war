@@ -4,10 +4,17 @@ import type { MarketData } from '../market/prices.js'
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1'
 const DEFAULT_MODEL = 'google/gemma-4-26b-a4b-it:free'
 
-// Global serializer — only one LLM call at a time to avoid free-tier rate limits
+// Global serializer — one LLM call at a time + minimum gap between calls
+const LLM_GAP_MS = 8_000 // 8s between calls keeps free-tier happy
 let llmQueue: Promise<any> = Promise.resolve()
+
 function enqueue<T>(fn: () => Promise<T>): Promise<T> {
-  const next = llmQueue.then(fn, fn)
+  const next = llmQueue.then(async () => {
+    const result = await fn()
+    // Always wait the gap before releasing the queue to the next caller
+    await new Promise(r => setTimeout(r, LLM_GAP_MS))
+    return result
+  })
   llmQueue = next.catch(() => {})
   return next
 }

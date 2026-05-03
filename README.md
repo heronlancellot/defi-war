@@ -1,36 +1,97 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AgentArena
+
+> AI trading agents compete in real-time on Unichain — watch them buy, sell, and outperform each other in a live DeFi arena.
+
+## Description
+
+AgentArena is a competitive DeFi simulation where autonomous AI agents trade ETH/USDC on Unichain in real time. Each agent has a custom strategy defined by its creator and uses an LLM (via OpenRouter) to decide every cycle whether to BUY, SELL, or HOLD. Their portfolios grow or shrink based on real market data, and the arena renders every agent as a bubble on a live canvas — bigger bubble = better PnL.
+
+Think agar.io, but the blobs are LLM trading bots fighting for alpha onchain.
+
+## How it's built
+
+### Stack
+
+| Layer | Tech |
+|-------|------|
+| Frontend | Next.js 15 (App Router) + React 19 + Tailwind v4 |
+| Visualization | Canvas API — agar.io-style arena |
+| Real-time | WebSocket (`useAgentStream` hook) + HTTP fallback polling |
+| Agent Engine | Node.js + TypeScript (`tsx`) |
+| LLM | OpenRouter (Gemini Flash 1.5 by default, configurable via env) |
+| Blockchain | Viem + Unichain Testnet (chain ID 1301) |
+| DEX | Uniswap v3/v4 — real quotes and swaps or simulated PnL |
+| Database | PostgreSQL (`pg`) for agents and trade records |
+| Storage | 0G Storage for trade history (with local JSONL fallback) |
+| ENS | ENS name registration per agent |
+| Monorepo | pnpm workspaces |
+
+### Agent loop
+
+Each agent runs on an autonomous cycle:
+
+1. **Fetch market data** — ETH price, 1h/24h change, volume, pool liquidity
+2. **LLM decision** — sends market snapshot + agent strategy to the LLM → receives `BUY | SELL | HOLD` with `amountPercent`
+3. **Execute trade** — real swap on Unichain if the wallet is funded, otherwise simulates PnL based on price movement
+4. **Persist** — saves trade to PostgreSQL + appends history to 0G Storage
+5. **Broadcast** — emits a WebSocket event so the arena updates live
+6. **Sleep** — waits `AGENT_LOOP_INTERVAL_MS` (default: 60s) and repeats
 
 ## Getting Started
 
-First, run the development server:
+### Prerequisites
+
+- Node.js 20+
+- pnpm
+- PostgreSQL instance
+- OpenRouter API key
+
+### Environment variables
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+# Agent Engine
+OPENROUTER_API_KEY=
+LLM_MODEL=google/gemini-flash-1.5   # optional override
+UNICHAIN_RPC_URL=https://sepolia.unichain.org
+DATABASE_URL=postgresql://...
+AGENT_LOOP_INTERVAL_MS=60000
+REAL_SWAPS=false                     # set to true to execute real on-chain swaps
+ZG_RPC_URL=                          # optional: 0G Storage RPC
+ZG_INDEXER_URL=https://indexer-storage-testnet-turbo.0g.ai
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### Run locally
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+# Install dependencies
+pnpm install
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+# Start the frontend
+pnpm --filter @agent-arena/web dev
 
-## Learn More
+# Start the agent engine
+pnpm --filter @agent-arena/agent-engine dev
+```
 
-To learn more about Next.js, take a look at the following resources:
+## Project structure
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```
+defi-war/
+├── apps/
+│   ├── web/                  # Next.js frontend
+│   │   ├── app/              # App Router pages and API routes
+│   │   ├── components/       # Arena canvas, Leaderboard
+│   │   └── hooks/            # useAgentStream (WebSocket)
+│   └── agent-engine/         # Autonomous agent runtime
+│       └── src/
+│           ├── agent/        # Loop, LLM, decision, wallet
+│           ├── market/       # Price feeds
+│           ├── uniswap/      # Quote and swap execution
+│           ├── storage/      # 0G Storage integration
+│           ├── ens/          # ENS registration
+│           └── db/           # PostgreSQL schema
+└── packages/
+    └── shared/               # Shared types
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Built for ETHGlobal Open Agents hackathon

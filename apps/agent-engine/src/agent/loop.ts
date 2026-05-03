@@ -28,8 +28,8 @@ export async function startAllAgentLoops() {
   console.log(`[Engine] Starting loops for ${agents.length} agent(s)`)
   for (let i = 0; i < agents.length; i++) {
     startAgentLoop(agents[i].id)
-    // Stagger starts by 8s so agents don't hammer LLM/APIs simultaneously
-    if (i < agents.length - 1) await sleep(8_000)
+    // Stagger starts so agents don't hammer LLM/APIs simultaneously
+    if (i < agents.length - 1) await sleep(12_000)
   }
 }
 
