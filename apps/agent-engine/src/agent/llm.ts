@@ -2,11 +2,24 @@ import type { Agent, LLMDecision } from '@agent-arena/shared'
 import type { MarketData } from '../market/prices.js'
 
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1'
-// Default model — override via LLM_MODEL env var
-// Good free/cheap options: "google/gemini-flash-1.5", "meta-llama/llama-3.1-8b-instruct:free"
-const DEFAULT_MODEL = 'google/gemini-flash-1.5'
+const DEFAULT_MODEL = 'google/gemma-4-26b-a4b-it:free'
 
-export async function getLLMDecision(
+// Global serializer — only one LLM call at a time to avoid free-tier rate limits
+let llmQueue: Promise<any> = Promise.resolve()
+function enqueue<T>(fn: () => Promise<T>): Promise<T> {
+  const next = llmQueue.then(fn, fn)
+  llmQueue = next.catch(() => {})
+  return next
+}
+
+export function getLLMDecision(
+  agent: Agent & { portfolioEth?: number; portfolioUsdc?: number; lastTrade?: string },
+  marketData: MarketData,
+): Promise<LLMDecision> {
+  return enqueue(() => _getLLMDecision(agent, marketData))
+}
+
+async function _getLLMDecision(
   agent: Agent & { portfolioEth?: number; portfolioUsdc?: number; lastTrade?: string },
   marketData: MarketData,
 ): Promise<LLMDecision> {
@@ -42,32 +55,47 @@ Seu portfolio atual:
 Decida sua próxima ação.
 `.trim()
 
-  const res = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': 'https://github.com/heronlancellot/defi-war',
-      'X-Title': 'AgentArena',
-    },
-    body: JSON.stringify({
-      model: process.env.LLM_MODEL ?? DEFAULT_MODEL,
-      max_tokens: 256,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-    }),
+  const model = process.env.LLM_MODEL ?? DEFAULT_MODEL
+  const body = JSON.stringify({
+    model,
+    max_tokens: 256,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ],
   })
 
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`OpenRouter error ${res.status}: ${err}`)
+  // Retry up to 3x on 429 with exponential backoff
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const res = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://github.com/heronlancellot/defi-war',
+        'X-Title': 'AgentArena',
+      },
+      body,
+    })
+
+    if (res.status === 429) {
+      const wait = (attempt + 1) * 12_000
+      console.warn(`[LLM] 429 rate limit on ${model}, retrying in ${wait / 1000}s (attempt ${attempt + 1}/3)`)
+      await new Promise(r => setTimeout(r, wait))
+      continue
+    }
+
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(`OpenRouter error ${res.status}: ${err}`)
+    }
+
+    const data = await res.json()
+    const text: string = data.choices?.[0]?.message?.content ?? ''
+    return parseDecision(text)
   }
 
-  const data = await res.json()
-  const text: string = data.choices?.[0]?.message?.content ?? ''
-  return parseDecision(text)
+  throw new Error(`OpenRouter: max retries exceeded for model ${model}`)
 }
 
 function parseDecision(text: string): LLMDecision {

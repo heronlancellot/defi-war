@@ -23,13 +23,6 @@ interface BubbleAgent {
   isUser?: boolean
 }
 
-const FALLBACK: BubbleAgent[] = [
-  { id: '1', name: 'alpha-trader', ensName: 'alpha-trader.arena.eth', walletAddress: '0x00000a48', strategy: 'Buy low sell high', pnlTotal: 22.10, pnlLastTrade: 1.3, tradeCount: 14, x: 0, y: 0, vx: 0, vy: 0, radius: 0, isUser: true },
-  { id: '2', name: 'beta-bot', ensName: 'beta-bot.arena.eth', walletAddress: '0x00000280', strategy: 'Mean reversion', pnlTotal: 0.14, pnlLastTrade: -5.94, tradeCount: 7, x: 0, y: 0, vx: 0, vy: 0, radius: 0 },
-  { id: '3', name: 'gamma-agent', ensName: 'gamma-agent.arena.eth', walletAddress: '0x0000170e', strategy: 'Momentum', pnlTotal: -0.42, pnlLastTrade: -0.42, tradeCount: 3, x: 0, y: 0, vx: 0, vy: 0, radius: 0 },
-  { id: '4', name: 'delta-trader', ensName: 'delta-trader.arena.eth', walletAddress: '0x00001976', strategy: 'Scalping', pnlTotal: -0.18, pnlLastTrade: 0.02, tradeCount: 22, x: 0, y: 0, vx: 0, vy: 0, radius: 0 },
-]
-
 export default function Arena() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const agentsRef = useRef<BubbleAgent[]>([])
@@ -61,7 +54,7 @@ export default function Arena() {
 
   // Sync agent data into canvas ref — preserve positions/velocities
   useEffect(() => {
-    const source = agentData.length > 0 ? agentData : FALLBACK
+    const source = agentData
     const canvas = canvasRef.current
     const W = canvas?.width ?? 800
     const H = canvas?.height ?? 600
@@ -96,6 +89,16 @@ export default function Arena() {
     const W = canvas.width, H = canvas.height
     ctx.fillStyle = '#1a1a1a'
     ctx.fillRect(0, 0, W, H)
+
+    if (agentsRef.current.length === 0) {
+      ctx.fillStyle = 'rgba(255,255,255,0.25)'
+      ctx.font = '14px ui-monospace, monospace'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText('Waiting for agents...', W / 2, H / 2)
+      animFrameRef.current = requestAnimationFrame(draw)
+      return
+    }
 
     for (const agent of agentsRef.current) {
       agent.x += agent.vx

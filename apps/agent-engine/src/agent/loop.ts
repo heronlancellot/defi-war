@@ -23,17 +23,19 @@ const publicClient = createPublicClient({ chain: unichainTestnet, transport: htt
 // Active agent loops (agentId → true)
 const runningLoops = new Map<string, boolean>()
 
-export function startAllAgentLoops() {
-  const agents = getAllAgents()
+export async function startAllAgentLoops() {
+  const agents = await getAllAgents()
   console.log(`[Engine] Starting loops for ${agents.length} agent(s)`)
-  for (const agent of agents) {
-    startAgentLoop(agent.id)
+  for (let i = 0; i < agents.length; i++) {
+    startAgentLoop(agents[i].id)
+    // Stagger starts by 8s so agents don't hammer LLM/APIs simultaneously
+    if (i < agents.length - 1) await sleep(8_000)
   }
 }
 
 // Force one immediate cycle on all agents — useful for testing
-export function triggerCycleAll() {
-  const agents = getAllAgents()
+export async function triggerCycleAll() {
+  const agents = await getAllAgents()
   console.log(`[Engine] Manual trigger: running ${agents.length} cycle(s) now`)
   for (const agent of agents) {
     runOneCycle(agent.id).catch(err => console.error(`[${agent.id}] trigger error:`, err))
@@ -58,22 +60,33 @@ async function runLoop(agentId: string) {
 }
 
 export async function runOneCycle(agentId: string) {
-  const row = getAgentById(agentId)
+  const row = await getAgentById(agentId)
   if (!row) return
 
   const agent = dbRowToAgent(row)
-  console.log(`[${agent.name}] Starting cycle...`)
+  console.log(`[${agent.name}] ── cycle start ──`)
 
   // 1. Fetch market data
-  const market = await fetchMarketData()
+  let market
+  try {
+    market = await fetchMarketData()
+    console.log(`[${agent.name}] Market: ETH=$${market.eth.toFixed(2)} | 1h=${market.ethChange1h.toFixed(2)}%`)
+  } catch (err) {
+    console.error(`[${agent.name}] Failed to fetch market data:`, String(err))
+    return
+  }
 
   // 2. LLM decision
   let decision: LLMDecision
   try {
     decision = await getLLMDecision(agent, market)
-    if (!validateDecision(decision)) throw new Error('Invalid decision from LLM')
+    console.log(`[${agent.name}] LLM raw decision: action=${decision.action} tokenIn=${decision.tokenIn} tokenOut=${decision.tokenOut} amount=${decision.amountPercent}%`)
+    if (!validateDecision(decision)) {
+      console.warn(`[${agent.name}] Invalid decision from LLM — tokenIn=${decision.tokenIn} tokenOut=${decision.tokenOut} action=${decision.action}`)
+      throw new Error('Invalid decision from LLM')
+    }
   } catch (err) {
-    console.warn(`[${agent.name}] LLM error, defaulting to HOLD:`, String(err).slice(0, 200))
+    console.warn(`[${agent.name}] LLM error, defaulting to HOLD:`, String(err).slice(0, 300))
     decision = { action: 'HOLD', tokenIn: 'ETH', tokenOut: 'USDC', amountPercent: 0, reasoning: 'LLM error' }
   }
 
@@ -93,6 +106,8 @@ export async function runOneCycle(agentId: string) {
   const privateKey = row.private_key as string
   const realSwapEnabled = process.env.REAL_SWAPS === 'true' && privateKey?.startsWith('0x')
 
+  console.log(`[${agent.name}] Swap mode: ${realSwapEnabled ? 'REAL' : 'SIMULATION'}`)
+
   if (realSwapEnabled) {
     try {
       pnlChange = await executeRealSwap({
@@ -101,7 +116,7 @@ export async function runOneCycle(agentId: string) {
       })
       txHash = undefined // executeRealSwap returns pnlChange; txHash logged inside
     } catch (err) {
-      console.warn(`[${agent.name}] Real swap failed, falling back to simulation:`, String(err).slice(0, 150))
+      console.warn(`[${agent.name}] Real swap failed, falling back to simulation:`, String(err).slice(0, 200))
       pnlChange = simulatePnl(decision, market)
     }
   } else {
@@ -121,7 +136,7 @@ export async function runOneCycle(agentId: string) {
   }
 
   // 4. Persist
-  saveTrade({
+  await saveTrade({
     id: crypto.randomUUID(),
     agentId,
     action: decision.action,
@@ -134,7 +149,7 @@ export async function runOneCycle(agentId: string) {
     reasoning: decision.reasoning,
   })
 
-  updateAgentPnl(agentId, newPnlTotal, pnlChange, newEth, newUsdc, `${decision.action} ${decision.tokenIn}->${decision.tokenOut}`)
+  await updateAgentPnl(agentId, newPnlTotal, pnlChange, newEth, newUsdc, `${decision.action} ${decision.tokenIn}->${decision.tokenOut}`)
 
   appendTradeHistory({
     agentId,
@@ -149,7 +164,7 @@ export async function runOneCycle(agentId: string) {
 
   arenaEvents.emit('agent:updated', agentId)
 
-  console.log(`[${agent.name}] ✓ Trade | PnL: ${pnlChange >= 0 ? '+' : ''}${pnlChange.toFixed(3)}% | Total: ${newPnlTotal.toFixed(3)}% | ${realSwapEnabled ? 'REAL' : 'SIM'}`)
+  console.log(`[${agent.name}] ✓ Trade saved | PnL: ${pnlChange >= 0 ? '+' : ''}${pnlChange.toFixed(4)}% | Total: ${newPnlTotal.toFixed(4)}% | mode: ${realSwapEnabled ? 'REAL' : 'SIM'}`)
 }
 
 function simulatePnl(decision: LLMDecision, market: { ethChange1h: number }): number {
@@ -169,7 +184,6 @@ async function executeRealSwap(params: {
 }): Promise<number> {
   const { agent, decision, market, privateKey, portfolioEth, portfolioUsdc } = params
 
-  // Determine token addresses and amount
   const tokenInAddr = decision.tokenIn === 'ETH' ? TOKENS.WETH : TOKENS.USDC
   const tokenOutAddr = decision.tokenOut === 'ETH' ? TOKENS.WETH : TOKENS.USDC
 
@@ -181,7 +195,7 @@ async function executeRealSwap(params: {
   } else {
     const usdcAmount = portfolioUsdc * (decision.amountPercent / 100)
     if (usdcAmount < 1) throw new Error('USDC amount too small')
-    amountIn = BigInt(Math.floor(usdcAmount * 1e6)) // USDC has 6 decimals
+    amountIn = BigInt(Math.floor(usdcAmount * 1e6))
   }
 
   console.log(`[${agent.name}] Fetching quote: ${decision.tokenIn}→${decision.tokenOut} amount=${amountIn}`)
@@ -190,7 +204,6 @@ async function executeRealSwap(params: {
   const result = await executeSwap(quote, privateKey)
   console.log(`[${agent.name}] Swap tx: ${result.txHash}`)
 
-  // Calculate PnL from actual amounts
   const amountOutNum = decision.tokenOut === 'ETH'
     ? Number(formatEther(BigInt(result.amountOut)))
     : Number(formatUnits(BigInt(result.amountOut), 6))
