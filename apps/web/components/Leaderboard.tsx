@@ -39,12 +39,6 @@ export default function Leaderboard() {
     return () => clearInterval(id)
   }, [streamAgents.length])
 
-  const displayAgents = agents.length > 0 ? agents : [
-    { id: '1', name: 'alpha-trader', walletAddress: '0x00000a48', pnlTotal: 22.10, tradeCount: 14 },
-    { id: '2', name: 'beta-bot', walletAddress: '0x00000280', pnlTotal: 0.14, tradeCount: 7 },
-    { id: '3', name: 'gamma-agent', walletAddress: '0x0000170e', pnlTotal: -0.42, tradeCount: 3 },
-  ]
-
   return (
     <div className="p-4">
       <div className="flex items-center justify-between mb-4">
@@ -54,25 +48,32 @@ export default function Leaderboard() {
           <span className="text-xs text-zinc-600">{connected ? 'live' : 'polling'}</span>
         </div>
       </div>
-      <div className="space-y-2">
-        {displayAgents.map((agent, i) => {
-          const pnl = agent.pnlTotal ?? (agent as any).pnl_total ?? 0
-          const addr = agent.walletAddress ?? (agent as any).wallet_address ?? ''
-          return (
-            <div key={agent.id} className="flex items-center gap-3 p-2 rounded bg-zinc-900">
-              <span className="text-xs text-zinc-600 w-4">{i + 1}</span>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate">{agent.name}</p>
-                <p className="text-xs text-zinc-500 font-mono">{addr.slice(0, 12)}...</p>
-              </div>
-              <span className={`text-xs font-bold tabular-nums ${pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)}%
-              </span>
-            </div>
-          )
-        })}
-      </div>
-      <p className="text-xs text-zinc-600 mt-4 text-center">{displayAgents.length} agents active</p>
+
+      {agents.length === 0 ? (
+        <p className="text-xs text-zinc-600 text-center mt-8">Waiting for agents...</p>
+      ) : (
+        <>
+          <div className="space-y-2">
+            {agents.map((agent, i) => {
+              const pnl = agent.pnlTotal ?? (agent as any).pnl_total ?? 0
+              const addr = agent.walletAddress ?? (agent as any).wallet_address ?? ''
+              return (
+                <div key={agent.id} className="flex items-center gap-3 p-2 rounded bg-zinc-900">
+                  <span className="text-xs text-zinc-600 w-4">{i + 1}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{agent.name}</p>
+                    <p className="text-xs text-zinc-500 font-mono">{addr.slice(0, 12)}...</p>
+                  </div>
+                  <span className={`text-xs font-bold tabular-nums ${pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)}%
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+          <p className="text-xs text-zinc-600 mt-4 text-center">{agents.length} agents active</p>
+        </>
+      )}
     </div>
   )
 }

@@ -1,17 +1,15 @@
 import { createWalletClient, createPublicClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { defineChain } from 'viem'
-import type { UniswapQuote } from './api.js'
+import type { UniswapQuoteResponse } from './api.js'
+import { getSwapTransaction } from './api.js'
 
-// Unichain Testnet chain definition
 const unichainTestnet = defineChain({
   id: 1301,
   name: 'Unichain Testnet',
   nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
   rpcUrls: {
-    default: {
-      http: [process.env.UNICHAIN_TESTNET_RPC ?? 'https://sepolia.unichain.org'],
-    },
+    default: { http: [process.env.UNICHAIN_RPC_URL ?? 'https://sepolia.unichain.org'] },
   },
   testnet: true,
 })
@@ -21,11 +19,7 @@ export interface SwapResult {
   amountOut: string
 }
 
-export async function executeSwap(quote: UniswapQuote, privateKey: string): Promise<SwapResult> {
-  if (!quote.methodParameters) {
-    throw new Error('Quote does not contain methodParameters — cannot execute swap')
-  }
-
+export async function executeSwap(quote: UniswapQuoteResponse, privateKey: string): Promise<SwapResult> {
   const account = privateKeyToAccount(privateKey as `0x${string}`)
 
   const walletClient = createWalletClient({
@@ -39,19 +33,40 @@ export async function executeSwap(quote: UniswapQuote, privateKey: string): Prom
     transport: http(),
   })
 
-  const { calldata, value, to } = quote.methodParameters
+  // Sign permit2 if required (ERC20 tokenIn like USDC)
+  let signature: string | undefined
+  if (quote.permitData) {
+    const { domain, types, values } = quote.permitData
+    // Remove EIP712Domain from types — viem adds it automatically
+    const { EIP712Domain: _, ...signTypes } = types as any
+    signature = await walletClient.signTypedData({
+      account,
+      domain: domain as any,
+      types: signTypes,
+      primaryType: 'PermitSingle',
+      message: values as any,
+    })
+    console.log('[Uniswap] Permit2 signed')
+  }
 
+  // Get swap transaction calldata from Uniswap API
+  const tx = await getSwapTransaction(quote, signature)
+
+  if (!tx.data || tx.data === '0x') {
+    throw new Error('Swap transaction has empty calldata')
+  }
+
+  // Broadcast on-chain
   const txHash = await walletClient.sendTransaction({
-    to: to as `0x${string}`,
-    data: calldata as `0x${string}`,
-    value: BigInt(value ?? '0'),
+    to: tx.to as `0x${string}`,
+    data: tx.data as `0x${string}`,
+    value: BigInt(tx.value ?? '0'),
+    ...(tx.gasLimit ? { gas: BigInt(tx.gasLimit) } : {}),
   })
 
-  // Wait for receipt to confirm
   await publicClient.waitForTransactionReceipt({ hash: txHash })
 
-  return {
-    txHash,
-    amountOut: quote.output.amount,
-  }
+  const outputAmount = (quote.quote as any)?.output?.amount ?? '0'
+
+  return { txHash, amountOut: outputAmount }
 }

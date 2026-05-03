@@ -8,46 +8,34 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'name and strategy required' }, { status: 400 })
   }
 
-  // Generate wallet locally (web crypto)
-  const bytes = new Uint8Array(20)
-  crypto.getRandomValues(bytes)
-  const walletAddress = '0x' + Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
-
-  const pkBytes = new Uint8Array(32)
-  crypto.getRandomValues(pkBytes)
-  const privateKey = '0x' + Array.from(pkBytes).map(b => b.toString(16).padStart(2, '0')).join('')
-
-  const agent = {
+  // Send to engine — it generates the wallet properly (privateKey → address via viem)
+  const payload = {
     id: crypto.randomUUID(),
     name,
     ensName: `${name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}.arena.eth`,
-    walletAddress,
-    privateKey,
     strategy,
   }
 
-  // Persist in engine (which has the DB)
   try {
-    await fetch(`${ENGINE_URL}/agents`, {
+    const res = await fetch(`${ENGINE_URL}/agents`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(agent),
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      return NextResponse.json({ error: err.error ?? 'Engine error' }, { status: 500 })
+    }
+    // Engine returns { ok, id } — return full agent shape for the UI
+    return NextResponse.json({
+      ...payload,
+      pnlTotal: 0,
+      pnlLastTrade: 0,
+      tradeCount: 0,
     })
   } catch {
-    // Engine might not be running — store locally for now
-    console.warn('Agent engine not reachable')
+    return NextResponse.json({ error: 'Agent engine not reachable' }, { status: 503 })
   }
-
-  return NextResponse.json({
-    id: agent.id,
-    name: agent.name,
-    ensName: agent.ensName,
-    walletAddress: agent.walletAddress,
-    strategy: agent.strategy,
-    pnlTotal: 0,
-    pnlLastTrade: 0,
-    tradeCount: 0,
-  })
 }
 
 export async function GET() {

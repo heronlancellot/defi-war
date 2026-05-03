@@ -62,9 +62,9 @@ async function fetchUniswapPrice(): Promise<number | null> {
   try {
     const oneEth = parseEther('1').toString()
     // Use a burn address as swapper — we only need the quote, not to execute
-    const quote = await getQuote(TOKENS.WETH, TOKENS.USDC, oneEth, '0x000000000000000000000000000000000000dEaD')
+    const quote = await getQuote(TOKENS.ETH_NATIVE, TOKENS.USDC, oneEth, '0x000000000000000000000000000000000000dEaD')
     // USDC has 6 decimals
-    return Number(formatUnits(BigInt(quote.output.amount), 6))
+    return Number(formatUnits(BigInt((quote.quote as any).output?.amount ?? '0'), 6))
   } catch {
     return null
   }

@@ -2,6 +2,7 @@ import 'dotenv/config'
 import { createServer } from 'http'
 import { WebSocketServer, WebSocket } from 'ws'
 import { initDb, getAllAgents, createAgent, seedDemoAgents } from './db/schema.js'
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { startAllAgentLoops, startAgentLoop, triggerCycleAll } from './agent/loop.js'
 import { registerAgentSubname } from './ens/register.js'
 import { getAgentHistory } from './storage/0g.js'
@@ -52,12 +53,19 @@ const server = createServer((req, res) => {
     req.on('end', async () => {
       try {
         const agent = JSON.parse(body)
+        // Generate wallet in engine so privateKey → address derivation is always correct
+        if (!agent.privateKey) {
+          const privateKey = generatePrivateKey()
+          const account = privateKeyToAccount(privateKey)
+          agent.privateKey = privateKey
+          agent.walletAddress = account.address
+        }
         const ensName = await registerAgentSubname(agent.name, agent.walletAddress, agent.strategy)
         agent.ensName = ensName
         await createAgent(agent)
         startAgentLoop(agent.id)
         res.statusCode = 201
-        res.end(JSON.stringify({ ok: true, id: agent.id }))
+        res.end(JSON.stringify({ ok: true, id: agent.id, walletAddress: agent.walletAddress, ensName: agent.ensName }))
       } catch (err) {
         res.statusCode = 400
         res.end(JSON.stringify({ error: String(err) }))
@@ -130,6 +138,15 @@ const PORT = process.env.AGENT_ENGINE_PORT ?? 3001
     server.listen(PORT, async () => {
       console.log(`[AgentArena] Agent Engine running on port ${PORT}`)
       console.log(`[AgentArena] WebSocket server ready on ws://localhost:${PORT}`)
+
+      // Start test-trader with dedicated loop (no LLM, alternates SELL/BUY)
+      const allAgents = await getAllAgents()
+      const testAgent = allAgents.find((a: any) => a.name === 'test-trader')
+      if (testAgent) {
+        console.log(`[AgentArena] Starting test-trader loop (id: ${testAgent.id})`)
+        startAgentLoop(testAgent.id, true)
+      }
+
       await startAllAgentLoops()
     })
   } catch (err) {

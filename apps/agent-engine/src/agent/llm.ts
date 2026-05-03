@@ -5,13 +5,12 @@ const OPENROUTER_BASE = 'https://openrouter.ai/api/v1'
 const DEFAULT_MODEL = 'google/gemma-4-26b-a4b-it:free'
 
 // Global serializer — one LLM call at a time + minimum gap between calls
-const LLM_GAP_MS = 8_000 // 8s between calls keeps free-tier happy
+const LLM_GAP_MS = 8_000
 let llmQueue: Promise<any> = Promise.resolve()
 
 function enqueue<T>(fn: () => Promise<T>): Promise<T> {
   const next = llmQueue.then(async () => {
     const result = await fn()
-    // Always wait the gap before releasing the queue to the next caller
     await new Promise(r => setTimeout(r, LLM_GAP_MS))
     return result
   })
@@ -20,59 +19,70 @@ function enqueue<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 export function getLLMDecision(
-  agent: Agent & { portfolioEth?: number; portfolioUsdc?: number; lastTrade?: string },
+  agent: Agent & { portfolioEth?: number; lastTrade?: string },
   marketData: MarketData,
+  ethBalance: number,
+  usdcBalance: number,
 ): Promise<LLMDecision> {
-  return enqueue(() => _getLLMDecision(agent, marketData))
+  return enqueue(() => _getLLMDecision(agent, marketData, ethBalance, usdcBalance))
 }
 
 async function _getLLMDecision(
-  agent: Agent & { portfolioEth?: number; portfolioUsdc?: number; lastTrade?: string },
+  agent: Agent & { portfolioEth?: number; lastTrade?: string },
   marketData: MarketData,
+  ethBalance: number,
+  usdcBalance: number,
 ): Promise<LLMDecision> {
   const systemPrompt = `
-Você é um agente de trading autônomo na blockchain Unichain.
-Sua estratégia definida pelo usuário: "${agent.strategy}"
+You are an autonomous trading agent operating on Unichain Sepolia testnet.
+Your strategy: "${agent.strategy}"
 
-Você recebe dados de mercado e decide: BUY, SELL ou HOLD.
-Responda APENAS com JSON válido no formato:
+You trade ETH↔USDC on Uniswap. Decide whether to increase or reduce ETH exposure.
+Reply ONLY with valid JSON:
 {
   "action": "BUY" | "SELL" | "HOLD",
-  "tokenIn": "ETH" | "USDC",
-  "tokenOut": "ETH" | "USDC",
-  "amountPercent": number (0-100),
-  "reasoning": "string curta"
+  "amountPercent": number (1-100),
+  "reasoning": "short string in English"
 }
+
+BUY = swap USDC→ETH (profits if ETH price rises) — only viable if you have USDC
+SELL = swap ETH→USDC (profits if ETH price falls) — only viable if you have ETH
+HOLD = keep current position
+
+IMPORTANT: If you have 0 USDC, you CANNOT BUY — choose SELL or HOLD instead.
+If you have 0 ETH, you CANNOT SELL — choose BUY or HOLD instead.
 `.trim()
 
+  const totalValueUsd = ethBalance * marketData.eth + usdcBalance
+  const ethPct = totalValueUsd > 0 ? ((ethBalance * marketData.eth) / totalValueUsd * 100).toFixed(1) : '0.0'
+
   const userPrompt = `
-Dados de mercado atuais:
-- ETH/USDC: $${marketData.eth.toFixed(2)}
-- Variação 1h: ${marketData.ethChange1h.toFixed(2)}%
-- Variação 24h: ${marketData.ethChange24h.toFixed(2)}%
-- Volume 24h: $${(marketData.volume24h / 1e6).toFixed(1)}M
-- Liquidez pool: $${(marketData.liquidity / 1e6).toFixed(1)}M
+Market:
+- ETH price: $${marketData.eth.toFixed(2)}
+- 1h change: ${marketData.ethChange1h.toFixed(2)}%
+- 24h change: ${marketData.ethChange24h.toFixed(2)}%
+- 24h volume: $${(marketData.volume24h / 1e6).toFixed(1)}M
 
-Seu portfolio atual:
-- ETH: ${agent.portfolioEth ?? 0.1}
-- USDC: ${agent.portfolioUsdc ?? 200}
-- PnL total: ${agent.pnlTotal.toFixed(2)}%
-- Último trade: ${agent.lastTrade ?? 'nenhum'}
+Portfolio (real on-chain balances):
+- ETH: ${ethBalance.toFixed(6)} ETH ($${(ethBalance * marketData.eth).toFixed(2)})
+- USDC: ${usdcBalance.toFixed(2)} USDC
+- Total value: $${totalValueUsd.toFixed(2)} (${ethPct}% in ETH)
+- Cumulative PnL: ${agent.pnlTotal.toFixed(2)}%
+- Last trade: ${agent.lastTrade ?? 'none'}
 
-Decida sua próxima ação.
+Decide.
 `.trim()
 
   const model = process.env.LLM_MODEL ?? DEFAULT_MODEL
   const body = JSON.stringify({
     model,
-    max_tokens: 256,
+    max_tokens: 150,
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
     ],
   })
 
-  // Retry up to 3x on 429 with exponential backoff
   for (let attempt = 0; attempt < 3; attempt++) {
     const res = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
       method: 'POST',
@@ -87,7 +97,7 @@ Decida sua próxima ação.
 
     if (res.status === 429) {
       const wait = (attempt + 1) * 12_000
-      console.warn(`[LLM] 429 rate limit on ${model}, retrying in ${wait / 1000}s (attempt ${attempt + 1}/3)`)
+      console.warn(`[LLM] 429 rate limit, retrying in ${wait / 1000}s (attempt ${attempt + 1}/3)`)
       await new Promise(r => setTimeout(r, wait))
       continue
     }
@@ -106,21 +116,19 @@ Decida sua próxima ação.
 }
 
 function parseDecision(text: string): LLMDecision {
-  // Strip markdown code fences (```json ... ``` or ``` ... ```)
   const stripped = text.replace(/```(?:json)?\s*/gi, '').replace(/```/g, '').trim()
-
-  // Try to extract JSON object
   const match = stripped.match(/\{[\s\S]*\}/)
   if (!match) throw new Error(`LLM returned no JSON: ${text.slice(0, 200)}`)
 
   const parsed = JSON.parse(match[0])
 
-  // Normalize common LLM quirks
   if (parsed.action) parsed.action = String(parsed.action).toUpperCase().trim()
-  if (parsed.tokenIn) parsed.tokenIn = String(parsed.tokenIn).toUpperCase().replace('WETH', 'ETH').trim()
-  if (parsed.tokenOut) parsed.tokenOut = String(parsed.tokenOut).toUpperCase().replace('WETH', 'ETH').trim()
   if (typeof parsed.amountPercent === 'string') parsed.amountPercent = parseFloat(parsed.amountPercent)
   if (!parsed.amountPercent || parsed.amountPercent <= 0) parsed.amountPercent = 25
+
+  // ETH-only: tokenIn/tokenOut always ETH
+  parsed.tokenIn = 'ETH'
+  parsed.tokenOut = 'ETH'
 
   return parsed as LLMDecision
 }

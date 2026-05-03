@@ -48,21 +48,20 @@ export async function initDb(): Promise<void> {
 }
 
 export async function seedDemoAgents(): Promise<void> {
-  const res = await pool.query('SELECT COUNT(*) AS n FROM agents')
-  if (parseInt(res.rows[0].n) > 0) return
-
   const demos = [
     { name: 'alpha-trader',  strategy: 'Buy ETH when 1h change is negative (dip buy), sell when up 2%+. Aggressive.' },
     { name: 'beta-bot',      strategy: 'Mean reversion: sell ETH when it rises fast, buy when it drops fast.' },
     { name: 'gamma-agent',   strategy: 'Momentum trader: follow the trend. Buy when rising, sell when falling.' },
     { name: 'delta-scalper', strategy: 'Scalp small moves. Always use 20% of portfolio. High frequency.' },
     { name: 'epsilon-hodl',  strategy: 'Long-term holder. Only buy dips bigger than 3%. Never sell unless up 10%.' },
+    { name: 'test-trader',   strategy: 'TEST_AGENT: alternates SELL/BUY every cycle to validate swap execution.' },
   ]
 
+  let inserted = 0
   for (const d of demos) {
     const privateKey = generatePrivateKey()
     const account = privateKeyToAccount(privateKey)
-    await pool.query(
+    const res = await pool.query(
       `INSERT INTO agents (id, name, ens_name, wallet_address, private_key, strategy, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (name) DO NOTHING`,
@@ -76,8 +75,9 @@ export async function seedDemoAgents(): Promise<void> {
         new Date().toISOString(),
       ],
     )
+    if (res.rowCount && res.rowCount > 0) inserted++
   }
-  console.log(`[DB] Seeded ${demos.length} demo agents`)
+  if (inserted > 0) console.log(`[DB] Seeded ${inserted} new agent(s)`)
 }
 
 export async function createAgent(agent: {
