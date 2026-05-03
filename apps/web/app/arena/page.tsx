@@ -1,7 +1,13 @@
+'use client'
+
 import Arena from '../../components/Arena'
 import Leaderboard from '../../components/Leaderboard'
+import TradeToasts from '../../components/TradeToast'
+import { AgentStreamProvider, useAgentStreamCtx } from '../../hooks/AgentStreamContext'
 
-export default function ArenaPage() {
+function ArenaContent() {
+  const { tradeEvents } = useAgentStreamCtx()
+
   return (
     <div className="min-h-screen bg-[#111] text-white flex flex-col">
       <header className="px-6 py-3 border-b border-zinc-800 flex items-center justify-between flex-shrink-0">
@@ -23,6 +29,16 @@ export default function ArenaPage() {
           <Leaderboard />
         </div>
       </div>
+
+      <TradeToasts events={tradeEvents} />
     </div>
+  )
+}
+
+export default function ArenaPage() {
+  return (
+    <AgentStreamProvider>
+      <ArenaContent />
+    </AgentStreamProvider>
   )
 }

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useAgentStream } from '../hooks/useAgentStream'
+import { useAgentStreamCtx } from '../hooks/AgentStreamContext'
 
 interface AgentRow {
   id: string
@@ -12,7 +12,7 @@ interface AgentRow {
 }
 
 export default function Leaderboard() {
-  const { agents: streamAgents, connected } = useAgentStream()
+  const { agents: streamAgents, connected } = useAgentStreamCtx()
   const [agents, setAgents] = useState<AgentRow[]>([])
 
   // Use WebSocket stream when available

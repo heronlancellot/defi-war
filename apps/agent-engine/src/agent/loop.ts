@@ -148,6 +148,16 @@ async function runTestCycle(agentId: string) {
   await updateAgentPnl(agentId, newPnlTotal, pnlChange, newEth, newUsdc, `${action} ETH 25%`)
   appendTradeHistory({ agentId, action, tokenIn: decision.tokenIn, tokenOut: decision.tokenOut, pnl: pnlChange, reasoning: decision.reasoning, timestamp: new Date().toISOString(), txHash }).catch(() => {})
   arenaEvents.emit('agent:updated', agentId)
+  arenaEvents.emit('trade:executed', {
+    agentId,
+    agentName: agent.name,
+    action,
+    amountPercent: 25,
+    pnl: pnlChange,
+    reasoning: decision.reasoning,
+    txHash: txHash ?? null,
+    timestamp: new Date().toISOString(),
+  })
 
   const mode = canTrade && txHash ? 'REAL' : 'SIM'
   console.log(`[test-trader] ✓ ${action} 25% | PnL:${pnlChange >= 0 ? '+' : ''}${pnlChange.toFixed(4)}% | Total:${newPnlTotal.toFixed(4)}% | ${mode}`)
@@ -260,6 +270,16 @@ export async function runOneCycle(agentId: string) {
   }).catch(() => {})
 
   arenaEvents.emit('agent:updated', agentId)
+  arenaEvents.emit('trade:executed', {
+    agentId,
+    agentName: agent.name,
+    action: decision.action,
+    amountPercent: decision.amountPercent,
+    pnl: pnlChange,
+    reasoning: decision.reasoning,
+    txHash: txHash ?? null,
+    timestamp: new Date().toISOString(),
+  })
 
   const mode = canTrade && txHash ? 'REAL' : 'SIM'
   const txStr = txHash ? ` tx:${txHash.slice(0, 10)}...` : ''

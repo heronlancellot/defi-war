@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useCallback, useState } from 'react'
-import { useAgentStream } from '../hooks/useAgentStream'
+import { useAgentStreamCtx } from '../hooks/AgentStreamContext'
 
 const getRadius = (pnl: number) => Math.min(120, Math.max(20, 40 + pnl * 2))
 const truncate = (s: string, n: number) => s.length > n ? s.slice(0, n) + '…' : s
@@ -29,7 +29,7 @@ export default function Arena() {
   const animFrameRef = useRef<number>(0)
   const tooltipRef = useRef<{ agent: BubbleAgent | null; mx: number; my: number }>({ agent: null, mx: 0, my: 0 })
 
-  const { agents: streamAgents } = useAgentStream()
+  const { agents: streamAgents } = useAgentStreamCtx()
   const [agentData, setAgentData] = useState<any[]>([])
 
   // Use WebSocket stream when available

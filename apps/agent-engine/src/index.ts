@@ -126,6 +126,14 @@ arenaEvents.on('agent:updated', () => {
   }).catch(() => {})
 })
 
+arenaEvents.on('trade:executed', (trade) => {
+  if (clients.size === 0) return
+  const msg = JSON.stringify({ type: 'trade', trade })
+  for (const ws of clients) {
+    if (ws.readyState === WebSocket.OPEN) ws.send(msg)
+  }
+})
+
 const PORT = process.env.AGENT_ENGINE_PORT ?? 3001
 
 // Initialize DB then start everything

@@ -13,9 +13,22 @@ export interface AgentRow {
   tradeCount: number
 }
 
-export function useAgentStream(): { agents: AgentRow[]; connected: boolean } {
+export interface TradeEvent {
+  id: string
+  agentId: string
+  agentName: string
+  action: 'BUY' | 'SELL'
+  amountPercent: number
+  pnl: number
+  reasoning: string
+  txHash: string | null
+  timestamp: number
+}
+
+export function useAgentStream(): { agents: AgentRow[]; connected: boolean; tradeEvents: TradeEvent[] } {
   const [agents, setAgents] = useState<AgentRow[]>([])
   const [connected, setConnected] = useState(false)
+  const [tradeEvents, setTradeEvents] = useState<TradeEvent[]>([])
   const wsRef = useRef<WebSocket | null>(null)
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -31,15 +44,31 @@ export function useAgentStream(): { agents: AgentRow[]; connected: boolean } {
       ws.onmessage = (e) => {
         try {
           const msg = JSON.parse(e.data)
+
           if (msg.type === 'init' || msg.type === 'update') {
             setAgents(msg.agents ?? [])
+          }
+
+          if (msg.type === 'trade' && msg.trade) {
+            const t = msg.trade
+            const event: TradeEvent = {
+              id: `${t.agentId}-${Date.now()}-${Math.random()}`,
+              agentId: t.agentId,
+              agentName: t.agentName,
+              action: t.action,
+              amountPercent: t.amountPercent,
+              pnl: t.pnl,
+              reasoning: t.reasoning,
+              txHash: t.txHash ?? null,
+              timestamp: Date.now(),
+            }
+            setTradeEvents(prev => [event, ...prev].slice(0, 10))
           }
         } catch {}
       }
 
       ws.onclose = () => {
         setConnected(false)
-        // Reconnect after 5s
         retryRef.current = setTimeout(connect, 5_000)
       }
 
@@ -54,5 +83,5 @@ export function useAgentStream(): { agents: AgentRow[]; connected: boolean } {
     }
   }, [])
 
-  return { agents, connected }
+  return { agents, connected, tradeEvents }
 }
